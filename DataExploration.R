@@ -1,5 +1,9 @@
 library(RSQLite)
 library(ncdf4)
+library(tidync)
+library(dbplyr)
+library(zoo)
+
 # connect to the SQLite db
 conn_fpa <- dbConnect(RSQLite::SQLite(), "./Data/DBs/FPA_FOD_20170508.sqlite")
 dbListTables(conn_fpa)
@@ -8,7 +12,12 @@ dbListTables(conn_fpa)
 data_fires <- dbGetQuery(conn_fpa, "SELECT * FROM Fires LIMIT 100")
 head(data_fires)
 
-dbDisconnect(conn)
+#find the range of longs and lats
+# need to readdress here to check the long/lat conversion
+min_lat <- as.numeric(dbGetQuery(conn_fpa, "SELECT MIN(LATITUDE) FROM Fires"))
+max_lat <- as.numeric(dbGetQuery(conn_fpa, "SELECT MAX(LATITUDE) FROM Fires"))
+min_lon <- as.numeric(dbGetQuery(conn_fpa, "SELECT MIN(LONGITUDE) FROM Fires"))+360
+max_lon <- as.numeric(dbGetQuery(conn_fpa, "SELECT MAX(LONGITUDE) FROM Fires"))+360
 
 #explore the air temperature NetCDF file
 data_airtemp <- nc_open('./Data/air.mon.mean.v501.nc')
@@ -36,15 +45,29 @@ date_air <- ncvar_get(data_airtemp, 'time')
 #Taking off 2440588 days gets us to the more typical 1970-01-01 origin.
 data_fires$newDate <- as.Date(data_fires$DISCOVERY_DATE, origin = structure(-2440588, class = "Date"))
 
-days2date <- function(v, origin='1900-01-01'){
-  origin <- as.Date(origin)
-  out <- list()
-  out <- lapply(v, function(x) seq(origin, by = paste(x, 'day'), length=2)[2])
-  do.call(c, out)           
-}
 
-date2days <- function(v, origin='1900-01-01'){
-  v <- as.Date(v)
-  origin <- as.Date(origin)
-  sapply(v, function(x) (x - origin)[[1]])
-}
+
+#let's try expirementing with TidyNc to save some time and get a dataframe of the air temps
+tidy_air <- tidync('./Data/air.mon.mean.v501.nc')
+
+hf_air <- tidy_air %>%
+  hyper_filter(
+    time = time >= 807192 & time <= 1016832,
+    lat = lat <= max_lat & lat >= min_lat, 
+    lon = lon <= max_lon & lon >= min_lon)
+
+df_air <- hf_air %>% hyper_tibble() %>% dplyr::select(time, air, lat, lon)
+
+df_air_tail <- tail(df_air)
+
+df_air_tail$newDate <- as.POSIXct(df_air_tail$time*3600, origin = '1900-01-01')
+df_air_tail$newDate <- as.yearmon(df_air_tail$newDate)
+
+
+df_air$newDate <- as.POSIXct(df_air$time*3600, origin = '1900-01-01')
+
+
+as.POSIXct(805920*3600, origin = '1900-01-01')
+
+as.POSIXct(1016813*3600, origin = '1900-01-01')
+
